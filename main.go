@@ -18,8 +18,9 @@ import (
 )
 
 type Config struct {
-	StationIDs  []int `toml:"station_ids"`
-	Concurrency int   `toml:"concurrency"`
+	StationIDs  []int  `toml:"station_ids"`
+	Concurrency int    `toml:"concurrency"`
+	NATSURL     string `toml:"nats_url"`
 }
 
 type StationsResponse struct {
@@ -105,6 +106,13 @@ func main() {
 	listFlag := flag.Bool("list", false, "list all available stations")
 	flag.Parse()
 
+	natsFlagSet := false
+	flag.CommandLine.Visit(func(f *flag.Flag) {
+		if f.Name == "nats" {
+			natsFlagSet = true
+		}
+	})
+
 	httpClient := &http.Client{
 		Timeout: 30 * time.Second,
 	}
@@ -129,8 +137,19 @@ func main() {
 		cfg.Concurrency = 1
 	}
 
+	resolvedNATSURL := "nats://localhost:4222"
+	if strings.TrimSpace(cfg.NATSURL) != "" {
+		resolvedNATSURL = strings.TrimSpace(cfg.NATSURL)
+	}
+	if strings.TrimSpace(os.Getenv("NATS_URL")) != "" {
+		resolvedNATSURL = strings.TrimSpace(os.Getenv("NATS_URL"))
+	}
+	if natsFlagSet {
+		resolvedNATSURL = *natsURL
+	}
+
 	nc, err := nats.Connect(
-		*natsURL,
+		resolvedNATSURL,
 		nats.DrainTimeout(natsTimeout),
 		nats.ErrorHandler(func(_ *nats.Conn, _ *nats.Subscription, err error) {
 			log.Printf("NATS async error: %v", err)

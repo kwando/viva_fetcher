@@ -40,10 +40,13 @@ station_ids = [
 ]
 
 concurrency = 5
+
+nats_url = "nats://localhost:4222"
 ```
 
 - `station_ids`: List of Viva station IDs to fetch data from
 - `concurrency`: Maximum number of concurrent fetch operations (default: 1)
+- `nats_url`: NATS server URL (default: `nats://localhost:4222`)
 
 ### Finding Station IDs
 
@@ -64,8 +67,12 @@ Use the `-list` flag to see all available stations:
 | Flag     | Default                 | Description                                          |
 | -------- | ----------------------- | ---------------------------------------------------- |
 | `-config`| `config.toml`           | Path to TOML configuration file                      |
-| `-nats`  | `nats://localhost:4222` | NATS server URL                                      |
+| `-nats`  | `nats://localhost:4222` | NATS server URL (overrides `NATS_URL` and config)    |
 | `-list`  | `false`                 | List all available stations and exit                 |
+
+Environment variables:
+
+- `NATS_URL`: NATS server URL (overrides config)
 
 ### Example
 
@@ -78,6 +85,9 @@ Use the `-list` flag to see all available stations:
 
 # Custom config and remote NATS server
 ./viva_fetcher -config /path/to/config.toml -nats nats://nats.example.com:4222
+
+# NATS URL via environment variable
+NATS_URL=nats://nats.example.com:4222 ./viva_fetcher
 ```
 
 ## NATS Messages
