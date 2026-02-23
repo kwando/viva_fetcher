@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"text/tabwriter"
 	"time"
@@ -32,17 +33,58 @@ type Station struct {
 	Name string `json:"Name"`
 }
 
+const (
+	maxResponseBytes     = 1 << 20
+	responseSnippetBytes = 200
+	natsTimeout          = 15 * time.Second
+)
+
+var (
+	stationsListURL      = "https://services.viva.sjofartsverket.se/output/vivaoutputservice.svc/vivastation"
+	stationDetailBaseURL = "https://services.viva.sjofartsverket.se/output/vivaoutputservice.svc/vivastation"
+)
+
+func readCappedBody(resp *http.Response) ([]byte, bool, error) {
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
+	if err != nil {
+		return nil, false, err
+	}
+	if len(body) == maxResponseBytes {
+		return body, true, nil
+	}
+	return body, false, nil
+}
+
+func formatSnippet(body []byte, tooLarge bool) string {
+	if tooLarge {
+		return "response exceeded 1MB limit"
+	}
+	if len(body) > responseSnippetBytes {
+		body = body[:responseSnippetBytes]
+	}
+	snippet := strings.TrimSpace(string(body))
+	if snippet == "" {
+		return "empty response body"
+	}
+	return snippet
+}
+
 func listStations(httpClient *http.Client) error {
-	url := "https://services.viva.sjofartsverket.se/output/vivaoutputservice.svc/vivastation"
-	resp, err := httpClient.Get(url)
+	resp, err := httpClient.Get(stationsListURL)
 	if err != nil {
 		return fmt.Errorf("failed to fetch stations: %w", err)
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, tooLarge, err := readCappedBody(resp)
 	if err != nil {
 		return fmt.Errorf("failed to read response: %w", err)
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return fmt.Errorf("unexpected status %s: %s", resp.Status, formatSnippet(body, tooLarge))
+	}
+	if tooLarge {
+		return fmt.Errorf("station list response exceeded 1MB limit")
 	}
 
 	var stationsResp StationsResponse
@@ -87,11 +129,31 @@ func main() {
 		cfg.Concurrency = 1
 	}
 
-	nc, err := nats.Connect(*natsURL)
+	nc, err := nats.Connect(
+		*natsURL,
+		nats.DrainTimeout(natsTimeout),
+		nats.ErrorHandler(func(_ *nats.Conn, _ *nats.Subscription, err error) {
+			log.Printf("NATS async error: %v", err)
+		}),
+		nats.DisconnectErrHandler(func(_ *nats.Conn, err error) {
+			if err != nil {
+				log.Printf("NATS disconnected: %v", err)
+				return
+			}
+			log.Printf("NATS disconnected")
+		}),
+		nats.ReconnectHandler(func(nc *nats.Conn) {
+			log.Printf("NATS reconnected to %s", nc.ConnectedUrl())
+		}),
+	)
 	if err != nil {
 		log.Fatalf("failed to connect to NATS: %v", err)
 	}
-	defer nc.Drain()
+	defer func() {
+		if err := nc.Drain(); err != nil {
+			log.Printf("failed to drain NATS: %v", err)
+		}
+	}()
 
 	sem := make(chan struct{}, cfg.Concurrency)
 	var wg sync.WaitGroup
@@ -104,7 +166,7 @@ func main() {
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			url := fmt.Sprintf("https://services.viva.sjofartsverket.se/output/vivaoutputservice.svc/vivastation/%d", id)
+			url := fmt.Sprintf("%s/%d", stationDetailBaseURL, id)
 
 			resp, err := httpClient.Get(url)
 			if err != nil {
@@ -113,9 +175,17 @@ func main() {
 			}
 			defer resp.Body.Close()
 
-			body, err := io.ReadAll(resp.Body)
+			body, tooLarge, err := readCappedBody(resp)
 			if err != nil {
 				log.Printf("failed to read response for station %d: %v", id, err)
+				return
+			}
+			if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+				log.Printf("station %d returned %s: %s", id, resp.Status, formatSnippet(body, tooLarge))
+				return
+			}
+			if tooLarge {
+				log.Printf("station %d response exceeded 1MB limit", id)
 				return
 			}
 
@@ -132,8 +202,8 @@ func main() {
 	wg.Wait()
 	log.Println("all stations processed")
 
-	if err := nc.Flush(); err != nil {
+	if err := nc.FlushTimeout(natsTimeout); err != nil {
 		log.Printf("failed to flush NATS: %v", err)
-		os.Exit(1)
+		return
 	}
 }
