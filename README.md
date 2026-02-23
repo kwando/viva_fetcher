@@ -47,7 +47,11 @@ concurrency = 5
 
 ### Finding Station IDs
 
-Station IDs can be discovered by browsing the Viva service directly or consulting Sjöfartsverket's documentation. Common stations include coastal monitoring points across Sweden.
+Use the `-list` flag to see all available stations:
+
+```bash
+./viva_fetcher -list
+```
 
 ## Usage
 
@@ -57,14 +61,18 @@ Station IDs can be discovered by browsing the Viva service directly or consultin
 
 ### Options
 
-| Flag      | Default                 | Description                     |
-| --------- | ----------------------- | ------------------------------- |
-| `-config` | `config.toml`           | Path to TOML configuration file |
-| `-nats`   | `nats://localhost:4222` | NATS server URL                 |
+| Flag     | Default                 | Description                                          |
+| -------- | ----------------------- | ---------------------------------------------------- |
+| `-config`| `config.toml`           | Path to TOML configuration file                      |
+| `-nats`  | `nats://localhost:4222` | NATS server URL                                      |
+| `-list`  | `false`                 | List all available stations and exit                 |
 
 ### Example
 
 ```bash
+# List all available stations
+./viva_fetcher -list
+
 # Using default config and local NATS
 ./viva_fetcher
 

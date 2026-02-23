@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -8,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"text/tabwriter"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -19,10 +21,58 @@ type Config struct {
 	Concurrency int   `toml:"concurrency"`
 }
 
+type StationsResponse struct {
+	GetStationsResult struct {
+		Stations []Station `json:"Stations"`
+	} `json:"GetStationsResult"`
+}
+
+type Station struct {
+	ID   int    `json:"ID"`
+	Name string `json:"Name"`
+}
+
+func listStations(httpClient *http.Client) error {
+	url := "https://services.viva.sjofartsverket.se/output/vivaoutputservice.svc/vivastation"
+	resp, err := httpClient.Get(url)
+	if err != nil {
+		return fmt.Errorf("failed to fetch stations: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read response: %w", err)
+	}
+
+	var stationsResp StationsResponse
+	if err := json.Unmarshal(body, &stationsResp); err != nil {
+		return fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	for _, station := range stationsResp.GetStationsResult.Stations {
+		fmt.Fprintf(w, "%d\t%s\n", station.ID, station.Name)
+	}
+	return w.Flush()
+}
+
 func main() {
 	configPath := flag.String("config", "config.toml", "path to TOML config file")
 	natsURL := flag.String("nats", "nats://localhost:4222", "NATS server URL")
+	listFlag := flag.Bool("list", false, "list all available stations")
 	flag.Parse()
+
+	httpClient := &http.Client{
+		Timeout: 30 * time.Second,
+	}
+
+	if *listFlag {
+		if err := listStations(httpClient); err != nil {
+			log.Fatalf("failed to list stations: %v", err)
+		}
+		return
+	}
 
 	var cfg Config
 	if _, err := toml.DecodeFile(*configPath, &cfg); err != nil {
@@ -42,10 +92,6 @@ func main() {
 		log.Fatalf("failed to connect to NATS: %v", err)
 	}
 	defer nc.Drain()
-
-	httpClient := &http.Client{
-		Timeout: 30 * time.Second,
-	}
 
 	sem := make(chan struct{}, cfg.Concurrency)
 	var wg sync.WaitGroup
